@@ -1311,6 +1311,11 @@ function doSearch() {
 
   if (results.length === 0) {
     searchResults.innerHTML = '<div class="search-result-count">검색 결과가 없습니다</div>';
+    searchResults.classList.add('active');
+  } else if (results.length === 1) {
+    // 결과 1건이면 곧바로 최종 스팟으로 이동 (한 번에 도착)
+    searchResults.classList.remove('active');
+    goToPlace(results[0].idx);
   } else {
     let html = `<div class="search-result-count">${results.length}개 결과</div>`;
     results.slice(0, 50).forEach(r => {
@@ -1322,8 +1327,8 @@ function doSearch() {
       html += '<div class="search-result-count">... 외 ' + (results.length - 50) + '개</div>';
     }
     searchResults.innerHTML = html;
+    searchResults.classList.add('active');
   }
-  searchResults.classList.add('active');
 }
 
 searchInput.addEventListener('keyup', function(e) {
@@ -1341,28 +1346,41 @@ document.addEventListener('click', function(e) {
   }
 });
 
-// 검색 결과 / 사진 버튼 클릭 = 한 단계 줌인, 해당 단계에서 멈춤
-// (현재 단계 → 다음 단계로 한 번에 한 칸만 이동, 멈추고 다음 클릭 대기)
+// 검색 결과 / 사진 버튼 클릭 = 한 번에 최종 스팟까지 곡선 비행 이동 + 팝업 자동 오픈
+// (Leaflet flyTo: 자연스러운 줌아웃 → 이동 → 줌인 곡선 애니메이션)
+const SEARCH_TARGET_ZOOM = 15;
+const SEARCH_FLY_DURATION = 1.6; // 초 — 곡선 비행 시간 (재미 요소)
 function goToPlace(idx) {
   const p = places[idx];
   searchResults.classList.remove('active');
 
-  const curZ = map.getZoom();
   const target = [p.lat, p.lng];
+  // 이미 충분히 가까이·확대되어 있으면 짧고 가볍게, 멀면 길고 영화적으로
+  const curZ = map.getZoom();
+  const curC = map.getCenter();
+  const dLat = curC.lat - target[0];
+  const dLng = curC.lng - target[1];
+  const distSq = dLat*dLat + dLng*dLng;
+  const isNear = (curZ >= SEARCH_TARGET_ZOOM - 1) && (distSq < 0.01); // 약 ~10km 이내·근접 줌
+  const duration = isNear ? 0.6 : SEARCH_FLY_DURATION;
 
-  // 현재 단계에 따라 딱 한 단계만 줌인 (1 → 2 → 3 순서)
-  if (curZ < STAGE_2_ZOOM) {
-    // 1단계 → 2단계 (대상 방향으로 이동하되 줌은 2단계까지만)
-    map.flyTo(target, STAGE_2_ZOOM, { duration: STAGE_DURATION });
-  } else if (curZ < STAGE_3_ZOOM) {
-    // 2단계 → 3단계 (대상 중심, 세부 줌)
-    map.flyTo(target, STAGE_3_ZOOM, { duration: STAGE_DURATION });
-    map.once('moveend', () => markers[idx].openPopup());
-  } else {
-    // 이미 3단계 이상 → 대상으로 이동 + 팝업만 열기
-    map.flyTo(target, STAGE_3_ZOOM, { duration: STAGE_DURATION });
-    map.once('moveend', () => markers[idx].openPopup());
-  }
+  // 한 번의 호출로 곡선 비행 (단계별 클릭 불필요)
+  map.flyTo(target, SEARCH_TARGET_ZOOM, {
+    duration: duration,
+    easeLinearity: 0.25
+  });
+  // 도착하면 팝업 자동 오픈 (markercluster가 클러스터에 묶었을 수도 있으므로 spiderfy 처리)
+  map.once('moveend', () => {
+    const m = markers[idx];
+    if (m) {
+      // 클러스터로 묶여 있으면 풀어서 팝업 열기
+      if (typeof cluster !== 'undefined' && cluster.zoomToShowLayer) {
+        cluster.zoomToShowLayer(m, () => { try { m.openPopup(); } catch(e){} });
+      } else {
+        try { m.openPopup(); } catch(e){}
+      }
+    }
+  });
 }
 
 /* 5. 모달(팝업) 제어 */
